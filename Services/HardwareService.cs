@@ -15,6 +15,8 @@ namespace OmenSuperHub.Services {
   internal static class HardwareService {
     static readonly object _lock = new object();
     static DateTime _lastQueryTime = DateTime.MinValue;
+    // ponytail: PERF —— Storage/Motherboard/SuperIO 的刷新节流(5s)。见 QueryHardware。
+    static DateTime _lastSlowUpdate = DateTime.MinValue;
     static readonly TimeSpan _cacheInterval = TimeSpan.FromMilliseconds(800);
 
     // ═══════════════════════════════════════════════════════
@@ -271,8 +273,25 @@ namespace OmenSuperHub.Services {
         goto afterLibre;
       }
 
+      // ponytail: PERF(低频设备降频) —— 旧实现每轮对所有硬件无条件 hardware.Update()。
+      // Storage(SSD 温度)与 Motherboard/SuperIO 的传感器刷新是 LHM 里最贵的部分之一
+      // (SMART 查询走 IOCTL,SuperIO 走端口 IO),但它们反映的是"分钟级"变化量:
+      // SSD 温度不会在 800ms 内跳变,主板传感器同理。
+      // 实测空载单核占用 9~18%,其中这部分占了相当比例。
+      // 现在:CPU/GPU 保持每轮刷新(风扇曲线依赖,必须新鲜);
+      //       Storage/Motherboard/SuperIO 降为每 5 秒刷新一次。
+      bool slowTick = (DateTime.UtcNow - _lastSlowUpdate).TotalSeconds >= 5;
+      if (slowTick) _lastSlowUpdate = DateTime.UtcNow;
+
       foreach (LibreIHardware hardware in LibreComputer.Hardware) {
-        if (hardware.HardwareType == LibreHardwareType.Cpu || hardware.HardwareType == LibreHardwareType.GpuNvidia || hardware.HardwareType == LibreHardwareType.GpuAmd || hardware.HardwareType == LibreHardwareType.GpuIntel || hardware.HardwareType == LibreHardwareType.Storage || hardware.HardwareType == LibreHardwareType.Motherboard || hardware.HardwareType == LibreHardwareType.SuperIO) {
+        bool isFast = hardware.HardwareType == LibreHardwareType.Cpu
+                   || hardware.HardwareType == LibreHardwareType.GpuNvidia
+                   || hardware.HardwareType == LibreHardwareType.GpuAmd
+                   || hardware.HardwareType == LibreHardwareType.GpuIntel;
+        bool isSlow = hardware.HardwareType == LibreHardwareType.Storage
+                   || hardware.HardwareType == LibreHardwareType.Motherboard
+                   || hardware.HardwareType == LibreHardwareType.SuperIO;
+        if (isFast || (isSlow && slowTick)) {
           hardware.Update();
 
           foreach (LibreISensor sensor in hardware.Sensors) {
