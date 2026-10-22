@@ -154,17 +154,26 @@ namespace OmenSuperHub.Pages {
         double gpuUtil = gpuOn ? HardwareService.GPUUsage : 0;
         double gpuFan = gpuOn ? HardwareService.FanSpeedNow[1] * 100 : 0;
         double gpuClock = gpuOn ? HardwareService.GPUClock : 0;
-        int ir = (int)HardwareService.GetDisplayIrTemp();
-        int amb = GetSensorTemperature(1);
-        int pch = GetSensorTemperature(2);
-        int vr = GetSensorTemperature(3);
+        // ponytail: FIX(chassis-label) —— 本平台只有一路板载温度(机架/机箱内部传感器)。
+        // 旧代码把同一个值塞进 ir/amb/pch/vr 四格,且标签硬编码为 IR/环境/PCH/VR,
+        // 用户看到的是四行完全相同的数字,而且没有「机架温度」这一项。
+        bool multiSensor = OmenHardware.HasMultipleBoardSensors();
+        int ir, amb, pch, vr;
+        string boardLabel = null;
+        if (multiSensor) {
+          ir = GetSensorTemperature(0); amb = GetSensorTemperature(1);
+          pch = GetSensorTemperature(2); vr = GetSensorTemperature(3);
+        } else {
+          ir = GetSensorTemperature(0); amb = -1; pch = -1; vr = -1;
+          boardLabel = Strings.SysChassisTemp;
+        }
         // Push results back to UI thread
         Dispatcher.BeginInvoke(new Action(() =>
           RefreshDashboardCore(cpuOn, gpuOn, memOn, mem, cpuTemp, cpuUtil, cpuFan, cpuClock,
               gpuTemp, gpuUtil, gpuFan, gpuClock, presetKey, fc, ft)
         ), DispatcherPriority.Background);
         Dispatcher.BeginInvoke(new Action(() =>
-          RefreshSensorsCore(cpuTemp, gpuTemp, ir, amb, pch, vr)
+          RefreshSensorsCore(cpuTemp, gpuTemp, ir, amb, pch, vr, boardLabel)
         ), DispatcherPriority.Background);
         // ponytail: 解耦 —— 不再在此驱动 FloatingWindow.UpdateAllText()。浮窗已有独立 1Hz 后端
         // timer(EnsureTimer)+ TrayService.UpdateTooltip 的 UpdateAllTextTicked 驱动,此处再 forceLayout
@@ -375,13 +384,20 @@ namespace OmenSuperHub.Pages {
       (zeroMeansOff ? v <= 0 : v < 0) ? label + ": -" : label + ": " + v + " °C";
 
     /// <summary>UI-only sensor temperature update from pre-fetched data.</summary>
-    void RefreshSensorsCore(int cpuT, int gpuT, int ir, int amb, int pch, int vr) {
+    /// <remarks>
+    /// ponytail: FIX(chassis-label) —— 旧签名只有 6 个 int,标签在函数体里硬编码成
+    /// IR/环境/PCH/VR。调用方即使传的是机架温度,显示出来仍然是「IR传感器」。
+    /// 现在把板载那一路的标签一并传入:单路平台显示「机架温度」,多路平台仍显示「IR传感器」。
+    /// </remarks>
+    void RefreshSensorsCore(int cpuT, int gpuT, int ir, int amb, int pch, int vr, string boardLabel = null) {
       SysCpuTempText.Text = SensorLine(Strings.SysCPUTemp, cpuT, true);
       SysGpuTempText.Text = SensorLine(Strings.SysGPUTemp, gpuT, true);
-      SysIrSensorText.Text = SensorLine(Strings.SysIRSensor, ir, false);
-      SysAmbientText.Text = SensorLine(Strings.SysAmbient, amb, false);
-      SysPchText.Text = SensorLine(Strings.SysPCH, pch, false);
-      SysVrText.Text = SensorLine(Strings.SysVR, vr, false);
+      SysIrSensorText.Text = SensorLine(boardLabel ?? Strings.SysIRSensor, ir, false);
+      // 单路平台(传了 boardLabel)其余三格置空 → 不再显示三个重复数字
+      bool multi = string.IsNullOrEmpty(boardLabel);
+      SysAmbientText.Text = multi ? SensorLine(Strings.SysAmbient, amb, false) : "";
+      SysPchText.Text     = multi ? SensorLine(Strings.SysPCH, pch, false) : "";
+      SysVrText.Text      = multi ? SensorLine(Strings.SysVR, vr, false) : "";
       UpdateExtraTempRows();
     }
 
@@ -1390,15 +1406,17 @@ try { kb = GetKeyboardTypeName((NbKeyboardLightingType)(kbRaw = (int)GetKeyboard
       // ponytail: FIX(0x23-single-sensor) —— 与 RefreshSensorsCore 的调用点保持同一口径:
       // 单路板载传感器平台只显示「机架温度」,不再把同一个值塞进 IR/环境/PCH/VR 四格。
       int ir, amb, pch, vr;
+      string boardLabel = null;
       if (OmenHardware.HasMultipleBoardSensors()) {
         ir = GetSensorTemperature(0); amb = GetSensorTemperature(1);
         pch = GetSensorTemperature(2); vr = GetSensorTemperature(3);
       } else {
-        ir = GetSensorTemperature(0); amb = 0; pch = 0; vr = 0;
+        ir = GetSensorTemperature(0); amb = -1; pch = -1; vr = -1;
+        boardLabel = Strings.SysChassisTemp;
       }
       RefreshSensorsCore(
           (int)HardwareService.GetDisplayCpuTemp(), (int)HardwareService.GetDisplayGpuTemp(),
-          ir, amb, pch, vr);
+          ir, amb, pch, vr, boardLabel);
       _ = RefreshNvidiaPowerLimitAsync();
     }
 
