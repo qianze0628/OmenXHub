@@ -574,11 +574,24 @@ namespace OmenSuperHub.Services {
         if (System.Threading.Interlocked.Exchange(ref _fanTickRunning, 1) != 0) return;
         try {
         int fanSpeed1, fanSpeed2;
+        // ponytail: FIX(manual keep-alive) —— 固定转速/百分比档也必须走心跳。
+        // 旧实现手动档把 fanControlTimer 直接 Change(Infinite) 关掉,只写一次 0x2E。
+        // 实测 AMD EC 在最后一次写入后约 110s 会自行把 level 归 0(风扇停转/掉到 BIOS 表),
+        // 用户表现为"开到 5500 转一会就降速,甚至降到很低"。此处纳入心跳,每秒重申一次,
+        // 实测连续 240s 稳定不掉。
+        if (FanService.IsFixedRpm(ConfigService.FanControl)) {
+          int pct = FanService.ParseFanRpm(ConfigService.FanControl) / 100;
+          if (pct < 0) pct = 0; else if (pct > 100) pct = 100;
+          fanSpeed1 = fanSpeed2 = pct;
+        } else if (ConfigService.FanControl.Contains("max")) {
+          // 旧版遗留的 "max" 形态(100% 档),同样纳入心跳。
+          fanSpeed1 = fanSpeed2 = 100;
+        }
         // ponytail: FanSync 开启时,两条路径内部已用 max(CPU,GPU) 算出同源 RPM。
         // 这里再 fanSpeed2 = fanSpeed1 是一次 EC 写入前的防御性兜底,防止
         // 两条独立路径的 EMA/插值偶尔抖动一帧造成 RPM 差异。FanSync 关闭时
         // 两把风扇按各自 CPU/GPU 温度独立计算。
-        if (ConfigService.FanControl == "smart" || ConfigService.FanControl == "custom") {
+        else if (ConfigService.FanControl == "smart" || ConfigService.FanControl == "custom") {
           fanSpeed1 = FanService.GetSmartFanSpeed(0) / 100;
           fanSpeed2 = ConfigService.FanSync ? fanSpeed1 : FanService.GetSmartFanSpeed(1) / 100;
         } else {
@@ -747,7 +760,9 @@ namespace OmenSuperHub.Services {
         UpdateCheckedState("fanControlGroup", "智能自定义曲线");
       } else if (ConfigService.FanControl.EndsWith("%")) {
         SetMaxFanSpeedOff();
-        if (fanControlTimer != null) fanControlTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        // ponytail: FIX(manual keep-alive) —— 固定档保持每秒心跳(旧实现关掉定时器,
+        // 实测 EC 约 110s 后自行归零 → 风扇掉速/停转)。
+        if (fanControlTimer != null) fanControlTimer.Change(0, 1000);
         // ponytail: 注册表值可为任意字符串(旧残留/手工改坏),Parse 会抛 FormatException
         // 打断启动后续初始化。TryParse 失败则不写硬件(该分支内的 timer/MAX-off 已执行,
         // 跳到链尾由方法后续统一收尾);成功才下发转速。
@@ -760,13 +775,13 @@ namespace OmenSuperHub.Services {
       } else if (ConfigService.FanControl.Contains("max")) {
         SetMaxFanSpeedOff();
         SetFanLevel(100, 100, fan3: OmenHardware.IsThreeFan());
-        if (fanControlTimer != null) fanControlTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        if (fanControlTimer != null) fanControlTimer.Change(0, 1000);
         UpdateCheckedState("fanControlGroup", "手动: 100%");
       } else if (ConfigService.FanControl.Contains(" RPM")) {
         SetMaxFanSpeedOff();
-        if (fanControlTimer != null) fanControlTimer.Change(Timeout.Infinite, Timeout.Infinite);
         int rpmValue = FanService.ParseFanRpm(ConfigService.FanControl);
         SetFanLevel(rpmValue / 100, rpmValue / 100, fan3: OmenHardware.IsThreeFan());
+        if (fanControlTimer != null) fanControlTimer.Change(0, 1000);
         UpdateCheckedState("fanControlGroup", ConfigService.FanControl);
       }
     }

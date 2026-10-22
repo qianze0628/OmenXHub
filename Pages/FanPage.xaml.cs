@@ -328,8 +328,10 @@ namespace OmenSuperHub.Pages {
       // current preset stores.
       int rpm = FanService.ParseFanRpm(ConfigService.FanControl);
       ConfigService.FanControl = rpm + " RPM";
+      // ponytail: FIX(manual keep-alive) —— 切到手动档时保持心跳,不关定时器。
       SetMaxFanSpeedOff();
-      TrayService.fanControlTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+      SetFanLevel(rpm / 100, rpm / 100, fan3: OmenHardware.IsThreeFan());
+      TrayService.fanControlTimer?.Change(0, 1000);
       _initRpm = rpm;
     }
     _loading = true;
@@ -374,10 +376,13 @@ namespace OmenSuperHub.Pages {
         TrayService.fanControlTimer?.Change(0, 1000);
       } else if (mode == 4) {
         Views.OsdWindow.ShowFanModeOsd(ConfigService.FanControl);
-        TrayService.fanControlTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+        // ponytail: FIX(manual keep-alive) —— 手动档不再关心跳。
+        // 旧实现 Change(Infinite) 只写一次 0x2E,实测 EC 约 110s 后自行把 level 归 0
+        // (用户现象:开到 5500 转一会就降速甚至停转)。纳入每秒心跳后实测 240s 稳定。
         int rpm = FanService.ParseFanRpm(ConfigService.FanControl);
-        SetFanLevel(0, 0, fan3: OmenHardware.IsThreeFan());
+        SetMaxFanSpeedOff();
         SetFanLevel(rpm / 100, rpm / 100, fan3: OmenHardware.IsThreeFan());
+        TrayService.fanControlTimer?.Change(0, 1000);
       }
       // ponytail: 内置预设的风扇档(含手动/固定 RPM)是临时绑定,不持久化到预设子键——
       // 切走/重启回到预设 FanTable 默认(Extreme=cool/GpuPriority=balanced/LightUse=silent)。
@@ -472,8 +477,11 @@ namespace OmenSuperHub.Pages {
       if (item == null) { _loading = false; return; }
       int rpm = (int)item.Tag;
       FanRpmSlider.Value = rpm;
+      // ponytail: FIX(no-zero-dip) —— 去掉中间那次 SetFanLevel(0,0)。
+      // 实测该序列会让风扇先降到 0(用户听到"先停再转",且从 4600 调 4700 也会触发),
+      // 因为 0 是一次真实的 EC 写入,风扇真的会掉速再爬回来。直接写目标档即可平滑过渡
+      // (实测 46%→55% 全程单调爬升,无归零)。
       SetMaxFanSpeedOff();
-      SetFanLevel(0, 0, fan3: OmenHardware.IsThreeFan());
       SetFanLevel(rpm / 100, rpm / 100, fan3: OmenHardware.IsThreeFan());
       ConfigService.FanControl = rpm + " RPM";
       ConfigService.Save("FanControl");
@@ -492,8 +500,8 @@ namespace OmenSuperHub.Pages {
       double? val = FanRpmNum.Value;
       if (val == null || val < 500 || val > 6000) { _loading = false; return; }
       int rpm = (int)val;
+      // ponytail: FIX(no-zero-dip) —— 同 FanRpmCombo_SelectionChanged,去掉归零中间态。
       SetMaxFanSpeedOff();
-      SetFanLevel(0, 0, fan3: OmenHardware.IsThreeFan());
       SetFanLevel(rpm / 100, rpm / 100, fan3: OmenHardware.IsThreeFan());
       ConfigService.FanControl = rpm + " RPM";
       ConfigService.Save("FanControl");
@@ -1005,10 +1013,11 @@ namespace OmenSuperHub.Pages {
           TrayService.fanControlTimer?.Change(0, 1000);
         } else if (fc != null && fc.Contains(" RPM")) {
           int rpm = FanService.ParseFanRpm(fc);
+          // ponytail: FIX(manual keep-alive + no-zero-dip) —— 恢复配置时同样去掉归零中间态,
+          // 并保持心跳而不是关掉(否则 ~110s 后 EC 自行归零)。
           SetMaxFanSpeedOff();
-          SetFanLevel(0, 0, fan3: OmenHardware.IsThreeFan());
           SetFanLevel(rpm / 100, rpm / 100, fan3: OmenHardware.IsThreeFan());
-          TrayService.fanControlTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+          TrayService.fanControlTimer?.Change(0, 1000);
         } else {
           string table = ft == "cool" ? "cool.txt"
                        : ft == "balanced" ? "balanced.txt"

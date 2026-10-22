@@ -385,7 +385,8 @@ namespace OmenSuperHub.Services {
           SetMaxFanSpeedOff();
           OmenHardware.SetFanLevel(pct, pct, fan3: OmenHardware.IsThreeFan());
           Views.OsdWindow.ShowFanModeOsd(pct + "%");
-          TrayService.fanControlTimer.Change(Timeout.Infinite, Timeout.Infinite);
+          // ponytail: FIX(manual keep-alive) —— 保持每秒心跳,否则 EC 约 110s 自行归零。
+          TrayService.fanControlTimer.Change(0, 1000);
         }
       }
       // ponytail: 自动化改风扇模式后持久化 —— 与 FanPage 写回路径一致,否则风速模式
