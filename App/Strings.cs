@@ -374,16 +374,8 @@ namespace OmenSuperHub {
     public static string AutoFanProtectDesc => T("CPU温度>95°C且固定转速时强制切换为降温曲线", "CPU溫度>95°C且固定轉速時強制切換為降溫曲線", "Forces cool curve when CPU >95°C with fixed fan speed");
     public static string FanSync => T("风扇一致性", "風扇一致性", "Fan Consistency");
     public static string FanSyncDesc => T("所有风扇转速随 CPU/GPU 中较高温度同步", "所有風扇轉速隨 CPU/GPU 中較高溫度同步", "All fans track the higher of CPU/GPU temperature");
-    public static string FanRefTemp => T("风扇参考温度", "風扇參考溫度", "Fan Reference Temp");
-    public static string FanRefAuto => T("自动（CPU/GPU 取高）", "自動（CPU/GPU 取高）", "Auto (higher of CPU/GPU)");
-    public static string FanRefCpu => T("CPU 温度", "CPU 溫度", "CPU Temp");
-    public static string FanRefGpu => T("GPU 温度", "GPU 溫度", "GPU Temp");
-    public static string FanRefChassis => T("机架温度", "機架溫度", "Chassis Temp");
-    public static string UseIrForFanCurve => T("机架温度参与风扇曲线", "機架溫度參與風扇曲線", "Chassis Temp in Fan Curve");
-    // ponytail: 对齐 OMEN Gaming Hub 的官方语义 —— OGH 的 PerformanceControlModule 明确写:
-    // "Users can set the reference temperature to CPU, GPU, or chassis temperature"。
-    // 旧描述写"三者最高"是错的:机架温度恒低于 CPU/GPU,max() 永远取不到它,开关形同虚设。
-    public static string UseIrForFanCurveDesc => T("风扇转速参考 CPU / GPU / 机架温度中的最高值（机架温度由板载传感器测得，可能高于表面温度）", "風扇轉速參考 CPU / GPU / 機架溫度中的最高值（機架溫度由板載感測器測得，可能高於表面溫度）", "Fans use the highest of CPU / GPU / chassis temperature (chassis temp is measured by an internal sensor and may read higher than surface temperature)");
+    public static string UseIrForFanCurve => T("IR 参与风扇曲线", "IR 參與風扇曲線", "IR in Fan Curve");
+    public static string UseIrForFanCurveDesc => T("风扇转速随 CPU/GPU/IR 三者最高温度同步（官方三路算法，需机器有 IR 传感器）", "風扇轉速隨 CPU/GPU/IR 三者最高溫度同步（官方三路演算法，需機器有 IR 感測器）", "Fans track the highest of CPU/GPU/IR temperature (official 3-way algorithm, requires IR sensor)");
     public static string FanSmartSettings => T("曲线温度设置", "曲線溫度設置", "Curve Temperature Settings");
     public static string FanSmartEmaAlpha => T("温度平滑系数", "溫度平滑係數", "Temp Smoothing (EMA)");
     public static string FanSmartStepDown => T("降速保护 (RPM/s)", "降速保護 (RPM/s)", "Step-Down Rate (RPM/s)");

@@ -243,13 +243,7 @@ namespace OmenSuperHub.Pages {
       }
       AutoFanProtectToggle.IsChecked = ConfigService.AutoFanProtect == "on";
       FanSyncToggle.IsChecked = ConfigService.FanSync;
-      // ponytail: 参考温度选择器初始化(0=自动 1=CPU 2=GPU 3=机架)
-      switch (ConfigService.FanRefTemp) {
-        case "cpu": FanRefTempCombo.SelectedIndex = 1; break;
-        case "gpu": FanRefTempCombo.SelectedIndex = 2; break;
-        case "chassis": FanRefTempCombo.SelectedIndex = 3; break;
-        default: FanRefTempCombo.SelectedIndex = 0; break;
-      }
+      IrFanCurveToggle.IsChecked = ConfigService.UseIrForFanCurve;
       SmartIdleLambdaToggle.IsChecked = ConfigService.SmartFanIdleLambda;
       // ponytail: smart 参数按预设从 FanCurves/custom_<preset>_smart.txt 加载。
       // 文件不存在时保留 ConfigService 字段当前值（继承上一预设，对齐 EnsurePresetCurveFile 的克隆语义）。
@@ -449,16 +443,9 @@ namespace OmenSuperHub.Pages {
       ConfigService.Save("FanSync");
     }
 
-    void FanRefTemp_SelectionChanged(object sender, SelectionChangedEventArgs e) {
-      if (_loading) return;
-      string[] vals = { "auto", "cpu", "gpu", "chassis" };
-      int idx = FanRefTempCombo.SelectedIndex;
-      if (idx < 0 || idx >= vals.Length) return;
-      ConfigService.FanRefTemp = vals[idx];
-      ConfigService.Save("FanRefTemp");
-      // 切换参考温度后立即让曲线按新源重算(否则要等下一个心跳才生效)
-      FanService.InitSmartFanState(ConfigService.SmartFanEmaAlpha);
-      TrayService.fanControlTimer?.Change(0, 1000);
+    void IrFanCurveToggle_Changed(object sender, RoutedEventArgs e) {
+      ConfigService.UseIrForFanCurve = IrFanCurveToggle.IsChecked == true;
+      ConfigService.Save("UseIrForFanCurve");
     }
 
     void SmartIdleLambdaToggle_Changed(object sender, RoutedEventArgs e) {
