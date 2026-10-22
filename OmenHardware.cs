@@ -670,9 +670,32 @@ namespace OmenSuperHub {
     }
 
     // ─── Sensor ───────────────────────────────────────────────────────
+    // ponytail: FIX(0x23-single-sensor) —— 实测(暗影精灵 11 / 16-ap0xxx / 8E35):
+    //   0x23 idx=0/1/2/3 全部返回同一个值,载荷是 [temp, 0, 0, 0],index 参数被 BIOS 忽略;
+    //   outsize=128/1024 也只有第 0 字节有值,其余全 0。
+    //   即本平台 BIOS 只暴露 **一个** 板载温度传感器(机架/机箱内部传感器)。
+    // 旧实现把 0/1/2/3 当成 IR/环境/PCH/VR 四个独立传感器,导致:
+    //   - Dashboard 四个温度格显示完全相同的数字(用户可见的"数据不对")
+    //   - DetectAmbientSensor 用 "ir != ambient" 判定,本平台恒 false → 环境传感器被判为不支持,
+    //     进而 FanService 的 ambient 兜底路径永不触发。
+    // 现在保留 index 形参(调用方兼容),但如实返回同一路读数;并给出可用性标志。
+    static int _sensorTempCache = -2;
+    static uint _sensorTempTick;
     public static int GetSensorTemperature(byte sensorIndex) {
+      // 1s 缓存: Dashboard 一次刷新要读 4 次,避免 4 倍 WMI 开销
+      uint now = (uint)Environment.TickCount;
+      if (_sensorTempCache != -2 && (now - _sensorTempTick) < 1000) return _sensorTempCache;
       byte[] result = SendOmenBiosWmi(0x23, new byte[4] { sensorIndex, 0, 0, 0 }, 4);
-      return (result != null && result.Length > 0) ? result[0] : -1;
+      int v = (result != null && result.Length > 0) ? result[0] : -1;
+      if (v >= 1 && v <= 120) { _sensorTempCache = v; _sensorTempTick = now; }
+      return v;
+    }
+
+    /// <summary>本平台 0x23 是否提供独立的多路传感器(实测 8E35 = false,只有一路机架温度)。</summary>
+    public static bool HasMultipleBoardSensors() {
+      int a = GetSensorTemperature(0);
+      int b = GetSensorTemperature(1);
+      return a > 0 && b > 0 && a != b;
     }
 
     /// <summary>

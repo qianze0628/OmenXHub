@@ -1310,10 +1310,21 @@ try { kb = GetKeyboardTypeName((NbKeyboardLightingType)(kbRaw = (int)GetKeyboard
 	        try {
           cpuTemp = SensorLine(Strings.SysCPUTemp, (int)HardwareService.GetDisplayCpuTemp(), true);
           gpuTemp = SensorLine(Strings.SysGPUTemp, (int)HardwareService.GetDisplayGpuTemp(), true);
-          irTemp = SensorLine(Strings.SysIRSensor, GetSensorTemperature(0), false);
-          ambTemp = SensorLine(Strings.SysAmbient, GetSensorTemperature(1), false);
-          pchTemp = SensorLine(Strings.SysPCH, GetSensorTemperature(2), false);
-          vrTemp = SensorLine(Strings.SysVR, GetSensorTemperature(3), false);
+          // ponytail: FIX(0x23-single-sensor) —— 本平台 BIOS 只暴露一路板载温度(机架/机箱内部
+          // 传感器),旧代码把它当成 IR/环境/PCH/VR 四路分别显示,四个格子数字完全相同。
+          // 单路平台只显示「机架温度」一格,其余置空;多路平台(少数机型)维持原样。
+          int boardTemp = GetSensorTemperature(0);
+          if (OmenHardware.HasMultipleBoardSensors()) {
+            irTemp   = SensorLine(Strings.SysIRSensor, GetSensorTemperature(0), false);
+            ambTemp  = SensorLine(Strings.SysAmbient, GetSensorTemperature(1), false);
+            pchTemp  = SensorLine(Strings.SysPCH, GetSensorTemperature(2), false);
+            vrTemp   = SensorLine(Strings.SysVR, GetSensorTemperature(3), false);
+          } else {
+            irTemp   = SensorLine(Strings.SysChassisTemp, boardTemp, false);
+            ambTemp  = "";
+            pchTemp  = "";
+            vrTemp   = "";
+          }
         } catch { }
         string _pn = pn, _board = board;
         int _validation = validation, _tj = tj, _nvidiaTj = nvidiaTj, _kbRaw = kbRaw;
@@ -1376,9 +1387,18 @@ try { kb = GetKeyboardTypeName((NbKeyboardLightingType)(kbRaw = (int)GetKeyboard
     }
 
     void RefreshSensors() {
+      // ponytail: FIX(0x23-single-sensor) —— 与 RefreshSensorsCore 的调用点保持同一口径:
+      // 单路板载传感器平台只显示「机架温度」,不再把同一个值塞进 IR/环境/PCH/VR 四格。
+      int ir, amb, pch, vr;
+      if (OmenHardware.HasMultipleBoardSensors()) {
+        ir = GetSensorTemperature(0); amb = GetSensorTemperature(1);
+        pch = GetSensorTemperature(2); vr = GetSensorTemperature(3);
+      } else {
+        ir = GetSensorTemperature(0); amb = 0; pch = 0; vr = 0;
+      }
       RefreshSensorsCore(
           (int)HardwareService.GetDisplayCpuTemp(), (int)HardwareService.GetDisplayGpuTemp(),
-          GetSensorTemperature(0), GetSensorTemperature(1), GetSensorTemperature(2), GetSensorTemperature(3));
+          ir, amb, pch, vr);
       _ = RefreshNvidiaPowerLimitAsync();
     }
 

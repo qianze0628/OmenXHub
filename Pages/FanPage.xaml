@@ -247,18 +247,27 @@
               <ui:ToggleSwitch x:Name="FanSyncToggle" Grid.Column="1"
                               Checked="FanSyncToggle_Changed" Unchecked="FanSyncToggle_Changed"/>
             </Grid>
+            <!-- ponytail: 参考温度选择器 —— 对齐 OMEN Gaming Hub 的官方能力
+                 ("set the reference temperature to CPU, GPU, or chassis temperature")。
+                 取代原来那个"IR 参与风扇曲线"开关:机架温度恒低于 CPU/GPU,
+                 并进 max() 永远不生效,形同虚设。 -->
             <Grid Margin="0,6,0,6">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
               </Grid.ColumnDefinitions>
               <StackPanel>
-                <TextBlock Text="{x:Static app:Strings.UseIrForFanCurve}" FontSize="{DynamicResource FontSizeBody}" VerticalAlignment="Center"/>
+                <TextBlock Text="{x:Static app:Strings.FanRefTemp}" FontSize="{DynamicResource FontSizeBody}" VerticalAlignment="Center"/>
                 <TextBlock Text="{x:Static app:Strings.UseIrForFanCurveDesc}" FontSize="{DynamicResource FontSizeCaption}"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
               </StackPanel>
-              <ui:ToggleSwitch x:Name="IrFanCurveToggle" Grid.Column="1"
-                              Checked="IrFanCurveToggle_Changed" Unchecked="IrFanCurveToggle_Changed"/>
+              <ComboBox x:Name="FanRefTempCombo" Grid.Column="1" MinWidth="140" VerticalAlignment="Center"
+                        SelectionChanged="FanRefTemp_SelectionChanged">
+                <ComboBoxItem Content="{x:Static app:Strings.FanRefAuto}"/>
+                <ComboBoxItem Content="{x:Static app:Strings.FanRefCpu}"/>
+                <ComboBoxItem Content="{x:Static app:Strings.FanRefGpu}"/>
+                <ComboBoxItem Content="{x:Static app:Strings.FanRefChassis}"/>
+              </ComboBox>
             </Grid>
             <Grid Margin="0,6,0,6">
               <Grid.ColumnDefinitions>

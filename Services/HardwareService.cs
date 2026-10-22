@@ -157,9 +157,13 @@ namespace OmenSuperHub.Services {
     }
 
     public static void DetectAmbientSensor() {
-      int irTemp = OmenHardware.GetSensorTemperature(0);
+      // ponytail: FIX(0x23-single-sensor) —— 旧逻辑用 "ir != ambient" 判定本平台是否有独立
+      // 环境传感器。实测 8E35 上 0x23 四路全同(BIOS 只暴露一路),该判定恒为 false,
+      // 于是环境传感器被永久判为不支持,GetFittingTemperature 兜底路径失效。
+      // 改为:只要 0x23 能读到 1~120°C 的合理值,就认为"机架/环境温度"可用 ——
+      // 这一路本身就是机箱内部传感器,语义就是机架温度。
       int ambientTemp = OmenHardware.GetSensorTemperature(1);
-      IsAmbientSensorSupported = ambientTemp > 1 && irTemp != ambientTemp;
+      IsAmbientSensorSupported = ambientTemp > 1 && ambientTemp <= 120;
     }
 
     public static void RefreshPawnIOState() {
@@ -274,9 +278,19 @@ namespace OmenSuperHub.Services {
           foreach (LibreISensor sensor in hardware.Sensors) {
             if (hardware.HardwareType == LibreHardwareType.Cpu) {
               // ponytail: Intel → "CPU Package", AMD → "Package" / "Core (Tctl/Tdie)" / "Core (Tdie)"
+              //
+              // FIX(hottest-sensor): 旧实现用 = 覆盖赋值,命中多个传感器时"最后一个赢"。
+              // AMD Dragon Range (8945HX) 上 LHM 同时暴露 5 个匹配项:
+              //   Core (Tctl/Tdie) / CCD1 (Tdie) / CCD2 (Tdie) / CCDs Max (Tdie) / CCDs Average (Tdie)
+              // 循环顺序遍历,最后写进去的是 CCDs Average —— 平均值,比最热核低 1~5°C,
+              // 于是 XHub 显示的温度比 OMEN Gaming Hub 偏低,风扇按偏低的温度调速,散热吃亏。
+              // 改为取最大值:多传感器平台一律用最热的那个读数驱动风扇曲线(安全侧)。
+              // 注:CCDs Max (Tdie) 本身就是最热核,取 max 与它等价;单传感器平台行为不变。
               if (sensor.SensorType == LibreSensorType.Temperature &&
+                  sensor.Value != null &&
                   (sensor.Name.Contains("Package") || sensor.Name.Contains("Tctl/Tdie") || sensor.Name.Contains("Tdie"))) {
-                libreTempCPU = (int)sensor.Value.GetValueOrDefault();
+                int v = (int)sensor.Value.GetValueOrDefault();
+                if (v >= 1 && v <= 120 && v > libreTempCPU) libreTempCPU = v;
               }
               // CPU 额外项 — Intel: CPU Core Max / CPU Core Average / Distance to TjMax;AMD 双 CCD 命名不同(Tdie/CCD1)留待以后
               // ponytail: 1~120°C 钳位;读到才覆写,读不到保留上次 EMA(避免 LHM 间歇读 null 时 UI 抖 "-")

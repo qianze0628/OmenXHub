@@ -243,7 +243,13 @@ namespace OmenSuperHub.Pages {
       }
       AutoFanProtectToggle.IsChecked = ConfigService.AutoFanProtect == "on";
       FanSyncToggle.IsChecked = ConfigService.FanSync;
-      IrFanCurveToggle.IsChecked = ConfigService.UseIrForFanCurve;
+      // ponytail: 参考温度选择器初始化(0=自动 1=CPU 2=GPU 3=机架)
+      switch (ConfigService.FanRefTemp) {
+        case "cpu": FanRefTempCombo.SelectedIndex = 1; break;
+        case "gpu": FanRefTempCombo.SelectedIndex = 2; break;
+        case "chassis": FanRefTempCombo.SelectedIndex = 3; break;
+        default: FanRefTempCombo.SelectedIndex = 0; break;
+      }
       SmartIdleLambdaToggle.IsChecked = ConfigService.SmartFanIdleLambda;
       // ponytail: smart 参数按预设从 FanCurves/custom_<preset>_smart.txt 加载。
       // 文件不存在时保留 ConfigService 字段当前值（继承上一预设，对齐 EnsurePresetCurveFile 的克隆语义）。
@@ -326,7 +332,29 @@ namespace OmenSuperHub.Pages {
       // hardcoding 2500 — otherwise switching back to manual mode always resets
       // the slider to 2500, regardless of what the user set before or what the
       // current preset stores.
-      int rpm = FanService.ParseFanRpm(ConfigService.FanControl);
+      //
+      // FIX(manual-seed-from-current): 从自动档(静音/降温/平衡)或曲线档切到手动时,
+      // ConfigService.FanControl 是 "" / "smart",ParseFanRpm 会返回默认 2500 ——
+      // 于是风扇从当前实际转速(如降温档的 3700)直接掉到 2500,用户听得到突然变小声,
+      // 而且这一步是"切模式"顺带产生的,并非用户意图。
+      // 改为:非固定档时以"当前实际 EC 档位"作为手动起点,切过去转速连续不跳变。
+      int rpm;
+      if (FanService.IsFixedRpm(ConfigService.FanControl)) {
+        rpm = FanService.ParseFanRpm(ConfigService.FanControl);
+      } else {
+        // 实时读 EC 档位(0x2D)。失败则退回心跳缓存的 FanSpeedNow(同为档位值)。
+        int level = 0;
+        try {
+          var cur = OmenHardware.GetFanLevel();
+          if (cur != null && cur.Count > 0) level = cur[0];
+        } catch { }
+        if (level <= 0 && HardwareService.FanSpeedNow.Count > 0)
+          level = HardwareService.FanSpeedNow[0];
+        // 档位 → 显示转速(×100),与 Dashboard/HWiNFO 的换算口径一致
+        rpm = level > 0 ? level * 100 : 2500;
+        if (rpm < 500) rpm = 500;
+        if (rpm > 6000) rpm = 6000;
+      }
       ConfigService.FanControl = rpm + " RPM";
       // ponytail: FIX(manual keep-alive) —— 切到手动档时保持心跳,不关定时器。
       SetMaxFanSpeedOff();
@@ -421,9 +449,16 @@ namespace OmenSuperHub.Pages {
       ConfigService.Save("FanSync");
     }
 
-    void IrFanCurveToggle_Changed(object sender, RoutedEventArgs e) {
-      ConfigService.UseIrForFanCurve = IrFanCurveToggle.IsChecked == true;
-      ConfigService.Save("UseIrForFanCurve");
+    void FanRefTemp_SelectionChanged(object sender, SelectionChangedEventArgs e) {
+      if (_loading) return;
+      string[] vals = { "auto", "cpu", "gpu", "chassis" };
+      int idx = FanRefTempCombo.SelectedIndex;
+      if (idx < 0 || idx >= vals.Length) return;
+      ConfigService.FanRefTemp = vals[idx];
+      ConfigService.Save("FanRefTemp");
+      // 切换参考温度后立即让曲线按新源重算(否则要等下一个心跳才生效)
+      FanService.InitSmartFanState(ConfigService.SmartFanEmaAlpha);
+      TrayService.fanControlTimer?.Change(0, 1000);
     }
 
     void SmartIdleLambdaToggle_Changed(object sender, RoutedEventArgs e) {

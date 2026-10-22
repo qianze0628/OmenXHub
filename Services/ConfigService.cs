@@ -32,6 +32,14 @@ namespace OmenSuperHub.Services {
     // ponytail: IR 参与风扇曲线 max(cpu,gpu,ir) — 官方三路算法(docs/OMEN_OFFICIAL_FAN_ALGORITHM.md)。
     // 默认关:IR 是红外辐射温度,读数口径与 CPU/GPU 核心温不同,显式开启才改变现有风扇行为。
     public static bool UseIrForFanCurve = false;
+    // ponytail: 风扇曲线参考温度 —— 对齐 OMEN Gaming Hub 的官方能力
+    // ("set the reference temperature to CPU, GPU, or chassis temperature")。
+    //   "auto"    = 旧行为:max(CPU,GPU),开启 UseIrForFanCurve 时再并入机架温度
+    //   "cpu"     = 仅按 CPU 温度查曲线
+    //   "gpu"     = 仅按 GPU 温度查曲线
+    //   "chassis" = 仅按机架温度查曲线(板载传感器,可能高于表面温度)
+    // 默认 auto 保持既有行为不变。
+    public static string FanRefTemp = "auto";
     // ponytail: 空闲压低风扇(官方 IDLE_AUTO / EWMA idle 语义,默认关)—— CPU/GPU 占用低时:
     // 预设档(GetFanSpeedForTemperature)直接降至曲线最低档;自定义/smart(GetSmartFanSpeed)
     // 压平 smart 层 EMA 系数到 0.1。一个开关统管两条路径,用户显式开启才改变现有行为。
@@ -268,6 +276,7 @@ namespace OmenSuperHub.Services {
             case "FanMode": key.SetValue("FanMode", FanMode); break;
             case "FanControl": key.SetValue("FanControl", FanControl); break;
             case "UseIrForFanCurve": key.SetValue("UseIrForFanCurve", UseIrForFanCurve ? 1 : 0); break;
+            case "FanRefTemp": key.SetValue("FanRefTemp", FanRefTemp ?? "auto"); break;
             case "SmartFanIdleLambda": key.SetValue("SmartFanIdleLambda", SmartFanIdleLambda ? 1 : 0); break;
             case "TempSensitivity": key.SetValue("TempSensitivity", TempSensitivity); break;
             case "CpuPower": key.SetValue("CpuPower", CpuPower); break;
@@ -525,6 +534,9 @@ namespace OmenSuperHub.Services {
           FanMode = RegStr(key, "FanMode", "performance");
           FanControl = RegStr(key, "FanControl", "auto");
           UseIrForFanCurve = RegInt(key, "UseIrForFanCurve", 0) != 0;
+          FanRefTemp = RegStr(key, "FanRefTemp", "auto");
+          if (FanRefTemp != "auto" && FanRefTemp != "cpu" && FanRefTemp != "gpu" && FanRefTemp != "chassis")
+            FanRefTemp = "auto";
           SmartFanIdleLambda = RegInt(key, "SmartFanIdleLambda", 0) != 0;
           TempSensitivity = RegStr(key, "TempSensitivity", "medium");
           CpuPower = RegStr(key, "CpuPower", "max");

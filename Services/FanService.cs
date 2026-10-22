@@ -94,6 +94,39 @@ namespace OmenSuperHub.Services {
       _smartLastTick = (uint)Environment.TickCount;
     }
 
+    /// <summary>
+    /// 解析风扇曲线使用的参考温度(°C)。对齐 OMEN Gaming Hub 的官方能力:
+    /// "set the reference temperature to CPU, GPU, or chassis temperature"。
+    /// fanIndex: 0=CPU 风扇, 1=GPU 风扇。
+    /// </summary>
+    static float ResolveReferenceTemp(int fanIndex) {
+      string mode = ConfigService.FanRefTemp ?? "auto";
+      float cpu = HardwareService.RawCpuTemp;
+      float gpu = HardwareService.RawGpuTemp;
+      float chassis = HardwareService.RawIrTemp;   // 机架温度 = 板载 0x23 传感器
+      bool gpuUsable = HardwareService.MonitorGPU && gpu >= 15 && gpu <= 120;
+      bool chassisUsable = chassis >= 15 && chassis <= 120;
+
+      switch (mode) {
+        case "cpu":
+          return cpu;
+        case "gpu":
+          return gpuUsable ? gpu : cpu;
+        case "chassis":
+          // 机架温度不可读时回退到 CPU,避免整条曲线失去参考
+          return chassisUsable ? chassis : cpu;
+        default: // "auto" —— 保持旧行为,并保留 UseIrForFanCurve 作为"并入机架温度"的兼容开关
+          if (ConfigService.FanSync && gpuUsable) {
+            float t = Math.Max(cpu, gpu);
+            if (ConfigService.UseIrForFanCurve && chassisUsable) t = Math.Max(t, chassis);
+            return t;
+          }
+          float baseTemp = (fanIndex == 0) ? cpu : (gpuUsable ? gpu : cpu);
+          if (ConfigService.UseIrForFanCurve && chassisUsable) baseTemp = Math.Max(baseTemp, chassis);
+          return baseTemp;
+      }
+    }
+
     public static int GetSmartFanSpeed(int fanIndex) {
       lock (_fanLock) {
         // ponytail: FanSync 开启时,两把风扇共用 max(CPU,GPU) 作为参考温度,
@@ -104,14 +137,10 @@ namespace OmenSuperHub.Services {
         // ponytail: 自定义/smart 模式吃原始温度(不叠加温度层 RespondSpeed EMA)——
         // smart 层自己已有升快降慢 EMA + 迟滞 + 限速,双重平滑会让响应过肉。
         // 预设档仍走 HardwareService.CPUTemp/GPUTemp 平滑值(GetFanSpeedForTemperature)。
-        if (ConfigService.FanSync && HardwareService.MonitorGPU) {
-          float t = Math.Max(HardwareService.RawCpuTemp, HardwareService.RawGpuTemp);
-          if (ConfigService.UseIrForFanCurve) t = Math.Max(t, HardwareService.RawIrTemp);
-          rawTemp = t;
-        } else {
-          rawTemp = (fanIndex == 0) ? HardwareService.RawCpuTemp : HardwareService.RawGpuTemp;
-          if (ConfigService.UseIrForFanCurve) rawTemp = Math.Max(rawTemp, HardwareService.RawIrTemp);
-        }
+        // ponytail: FIX(ref-temp) —— 旧实现把机架温度并进 max(),但机架温度(约 35°C)恒低于
+        // CPU/GPU,Math.Max 永远取不到它,开关形同虚设。OGH 的官方语义是"可选参考温度"
+        // (CPU / GPU / chassis),所以这里按 ConfigService.FanRefTemp 显式选择。
+        rawTemp = ResolveReferenceTemp(fanIndex);
         if (rawTemp <= 0) rawTemp = OmenHardware.GetFittingTemperature();
         if (rawTemp <= 0) return _smartLastAppliedRpmCpu > 0 ? _smartLastAppliedRpmCpu : 2000;
 
@@ -335,13 +364,23 @@ namespace OmenSuperHub.Services {
           return GetFanSpeedForSpecificTemperature(fitted, CPUTempFanMap, fanIndex);
         }
 
+        // ponytail: FIX(ref-temp) —— 与 GetSmartFanSpeed 同口径:按 ConfigService.FanRefTemp
+        // 显式选择参考温度(CPU / GPU / 机架),而不是把机架温度并进 max() 里(那样永远取不到)。
+        // 预设档曲线也用同一份映射表(CPUTempFanMap),机架温度直接对这条曲线插值。
+        string refMode = ConfigService.FanRefTemp ?? "auto";
+        if (refMode == "chassis" && HardwareService.IrTemp >= 15f && HardwareService.IrTemp <= 120f)
+          return GetFanSpeedForSpecificTemperature(HardwareService.IrTemp, CPUTempFanMap, fanIndex);
+        if (refMode == "cpu")
+          return GetFanSpeedForSpecificTemperature(HardwareService.CPUTemp, CPUTempFanMap, fanIndex);
+        if (refMode == "gpu" && HardwareService.MonitorGPU && HardwareService.GpuTargetAvailable && HardwareService.GpuTempFresh)
+          return GetFanSpeedForSpecificTemperature(HardwareService.GPUTemp, GPUTempFanMap, fanIndex);
+
         // ponytail: FanSync 开启且有 GPU 时,两把风扇以 max(CPU,GPU) 对同一曲线插值,
         // 从源头保证 RPM 一致。MonitorGPU==false 时落到下方"仅 CPU"分支。
-        // UseIrForFanCurve 开启时加入 IR 路(官方三路 max(cpu,gpu,ir))。
         bool gpuTempUsable = HardwareService.MonitorGPU && HardwareService.GpuTargetAvailable && HardwareService.GpuTempFresh;
         if (ConfigService.FanSync && gpuTempUsable) {
           float maxT = Math.Max(HardwareService.CPUTemp, HardwareService.GPUTemp);
-          if (ConfigService.UseIrForFanCurve) maxT = Math.Max(maxT, HardwareService.IrTemp);
+          if (ConfigService.UseIrForFanCurve && HardwareService.IrTemp >= 15f) maxT = Math.Max(maxT, HardwareService.IrTemp);
           return GetFanSpeedForSpecificTemperature(maxT, CPUTempFanMap, fanIndex);
         }
 
