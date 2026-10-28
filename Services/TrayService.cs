@@ -564,6 +564,13 @@ namespace OmenSuperHub.Services {
     public static void StartTimers() {
       HardwareService.DetectAmbientSensor();
       HardwareService.RefreshPawnIOState();
+
+      // ponytail: FIX(boot-fan-stop) —— 心跳一启动就会读曲线表。但 RestoreConfig()(由
+      // App.xaml.cs 里另一个 Dispatcher.BeginInvoke 调度)未必已经跑过,此时表为空。
+      // 旧实现在表空时返回 0 → 写入 EC → 风扇停转,等曲线装好、温度升高后才狂转。
+      // 这里先按注册表里的 FanTable 把曲线装上(与 RestoreFanSettings 首个分支同口径),
+      // 保证第一次心跳就有依据。RestoreConfig 稍后再跑一次是幂等的。
+      EnsureFanCurveLoaded();
       // Fan control timer
       // ponytail: 重入守卫 —— WMI 偶发 >1s 时回调在线程池上叠加,两轮
       // SetMaxFanSpeedOff→SetFanLevel 序列交错可能让 EC 收到乱序写入;EMA 状态也被跳步。
@@ -595,8 +602,15 @@ namespace OmenSuperHub.Services {
           fanSpeed1 = FanService.GetSmartFanSpeed(0) / 100;
           fanSpeed2 = ConfigService.FanSync ? fanSpeed1 : FanService.GetSmartFanSpeed(1) / 100;
         } else {
-          fanSpeed1 = FanService.GetFanSpeedForTemperature(0) / 100;
-          fanSpeed2 = ConfigService.FanSync ? fanSpeed1 : FanService.GetFanSpeedForTemperature(1) / 100;
+          // ponytail: FIX(boot-fan-stop) —— 曲线表尚未加载(启动早期 RestoreConfig 还没跑)时
+          // GetFanSpeedForTemperature 返回 -1。此时**必须跳过本拍写入**,让 EC 保持 BIOS 自己的
+          // 风扇控制;否则旧实现会把 -1/100 = 0 写进 EC,风扇直接停转,等温度飙高后才狂转。
+          int s1 = FanService.GetFanSpeedForTemperature(0);
+          if (s1 < 0) return;
+          fanSpeed1 = s1 / 100;
+          int s2 = ConfigService.FanSync ? fanSpeed1 : FanService.GetFanSpeedForTemperature(1);
+          if (s2 < 0) return;
+          fanSpeed2 = s2 / 100;
         }
         // ponytail: AMD EC 需要每 tick 保活，否则 ~3 秒后回退到 BIOS 风扇表。
         // SetMaxFanSpeedOff(0x27) 通知 EC "保持在软件控制模式"，
@@ -783,6 +797,29 @@ namespace OmenSuperHub.Services {
         SetFanLevel(rpmValue / 100, rpmValue / 100, fan3: OmenHardware.IsThreeFan());
         if (fanControlTimer != null) fanControlTimer.Change(0, 1000);
         UpdateCheckedState("fanControlGroup", ConfigService.FanControl);
+      }
+    }
+
+    /// <summary>
+    /// 启动早期保证曲线表已加载 —— 心跳第一次读表前调用。
+    /// 与 RestoreFanSettings 的 FanTable 分支同口径;smart/custom 档走 ApplyPresetCurve。
+    /// 幂等:重复调用只是重新加载同一份文件。
+    /// </summary>
+    static void EnsureFanCurveLoaded() {
+      try {
+        if (FanService.IsCurveLoaded && ConfigService.FanControl != "smart"
+            && ConfigService.FanControl != "custom") return;
+        if (ConfigService.FanControl == "smart" || ConfigService.FanControl == "custom") {
+          FanService.ApplyPresetCurve(ConfigService.Preset);
+          FanService.InitSmartFanState(ConfigService.SmartFanEmaAlpha);
+          return;
+        }
+        string table = ConfigService.FanTable != null && ConfigService.FanTable.Contains("balanced") ? "balanced.txt"
+                     : ConfigService.FanTable != null && ConfigService.FanTable.Contains("cool") ? "cool.txt"
+                     : "silent.txt";
+        FanService.LoadFanConfig(table);
+      } catch (Exception ex) {
+        Logger.Error($"[TrayService] EnsureFanCurveLoaded: {ex.Message}");
       }
     }
 

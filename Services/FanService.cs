@@ -146,6 +146,8 @@ namespace OmenSuperHub.Services {
         var map = (fanIndex == 0) ? CPUTempFanMap : GPUTempFanMap;
         if (map.Count == 0) return lastApplied > 0 ? lastApplied : 2000;
         int rawSpeed = GetFanSpeedForSpecificTemperature(emaTemp, map, fanIndex);
+        // ponytail: FIX(boot-fan-stop) —— 表为空时该函数返回 -1,旧实现会直接 -1/100=0 写进 EC。
+        if (rawSpeed < 0) return lastApplied > 0 ? lastApplied : 2000;
 
         uint now = (uint)Environment.TickCount;
         uint dt = now - _smartLastTick; // unsigned subtraction handles wraparound
@@ -315,9 +317,27 @@ namespace OmenSuperHub.Services {
     // ═══════════════════════════════════════════════════════
     // Fan Speed Calculation with Interpolation
     // ═══════════════════════════════════════════════════════
+    /// <summary>
+    /// 曲线表是否已加载。启动早期(StartTimers 已跑、RestoreConfig 还没跑)表是空的,
+    /// 此时必须让调用方跳过写入,而不是把 0 档写进 EC —— 见 GetFanSpeedForTemperature。
+    /// </summary>
+    public static bool IsCurveLoaded {
+      get { lock (_fanLock) { return CPUTempFanMap.Count > 0 && GPUTempFanMap.Count > 0; } }
+    }
+
     public static int GetFanSpeedForTemperature(int fanIndex) {
       lock (_fanLock) {
-        if (CPUTempFanMap.Count == 0 || GPUTempFanMap.Count == 0) return 0;
+        // ponytail: FIX(boot-fan-stop) —— 旧实现表空时返回 0,而调用方会把它 /100 当档位
+        // 写进 EC(SetFanLevel(0,0)),风扇直接停转。
+        //
+        // 实测启动时序:App.xaml.cs 里 LibreComputer.Open() 完成后立刻 StartTimers(),
+        // 而 RestoreConfig()(加载 fan 曲线文件)是在**另一个** Dispatcher.BeginInvoke 里
+        // 后才跑的。这之间心跳已经触发,表为空 → 写 0 → 风扇停 →
+        // 等 RestoreConfig 装好曲线、温度也已升上来 → 曲线给出高转速 → 狂转。
+        // 用户现象:"刚开机风扇不转,过一会 CPU 很热了又开始狂转"。
+        //
+        // 现在返回 -1 表示"还没有依据",由调用方跳过本拍写入(EC 保持 BIOS 自己的控制)。
+        if (CPUTempFanMap.Count == 0 || GPUTempFanMap.Count == 0) return -1;
 
         // ponytail: 预设档空闲固定最低档(官方 IDLE_AUTO 语义,与自定义档 IsFanIdle 同源)。
         // 受 SmartFanIdleLambda 开关统一控制(与自定义档空闲压平 λ 同一开关):开启且空闲且
@@ -354,6 +374,9 @@ namespace OmenSuperHub.Services {
     }
 
     public static int GetFanSpeedForSpecificTemperature(float temperature, Dictionary<float, List<int>> tempFanMap, int fanIndex) {
+      // ponytail: FIX(boot-fan-stop) —— 表为空时旧实现 lowerBound/upperBound 都是哨兵值,
+      // 随后 tempFanMap[lowerBound] 直接抛 KeyNotFoundException。返回 -1 让调用方跳过。
+      if (tempFanMap == null || tempFanMap.Count == 0) return -1;
       float lowerBound = float.MinValue, upperBound = float.MaxValue;
       foreach (float t in tempFanMap.Keys) {
         if (t <= temperature && t > lowerBound) lowerBound = t;
