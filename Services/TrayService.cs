@@ -608,9 +608,19 @@ namespace OmenSuperHub.Services {
           int s1 = FanService.GetFanSpeedForTemperature(0);
           if (s1 < 0) return;
           fanSpeed1 = s1 / 100;
-          int s2 = ConfigService.FanSync ? fanSpeed1 : FanService.GetFanSpeedForTemperature(1);
-          if (s2 < 0) return;
-          fanSpeed2 = s2 / 100;
+          // ponytail: FIX(fan2-always-zero) —— 上一版这里写成
+          //     int s2 = ConfigService.FanSync ? fanSpeed1 : GetFanSpeedForTemperature(1);
+          //     fanSpeed2 = s2 / 100;
+          // FanSync=true 分支拿到的是**已经除过 100 的档位**(如 33),又除一次 → 0,
+          // 于是第二把风扇档位恒为 0、直接停转(实测日志 write(33,0))。
+          // 修复:同步时直接复用 fanSpeed1,不要再除;不同步时才各自取原始 RPM 换算。
+          if (ConfigService.FanSync) {
+            fanSpeed2 = fanSpeed1;
+          } else {
+            int s2 = FanService.GetFanSpeedForTemperature(1);
+            if (s2 < 0) return;
+            fanSpeed2 = s2 / 100;
+          }
         }
         // ponytail: AMD EC 需要每 tick 保活，否则 ~3 秒后回退到 BIOS 风扇表。
         // SetMaxFanSpeedOff(0x27) 通知 EC "保持在软件控制模式"，
@@ -620,6 +630,19 @@ namespace OmenSuperHub.Services {
         // ponytail: 三扇机优先独立第三扇曲线(GetFan3Speed 返回 -1 = 未配曲线,
         // 传 null 回退 OSH 均值跟随);双风机 IsThreeFan()=false,载荷仍 2 字节。
         int? fan3Speed = OmenHardware.IsThreeFan() ? FanService.GetFan3Speed() : null;
+        // ponytail: FIX(fan2-stop) —— GetFan3Speed 未配曲线时返回 -1。若原样传给
+        // SetFanLevel(..., int? fanSpeed3) 的三参重载,非 null 即触发 fan3 分支,
+        // ClampFanByte(-1) = 0 → 第三扇被写成 0;而且该重载用 fanSpeed3.HasValue 决定
+        // 是否发 3 字节载荷,会把本来双扇机型的载荷撑成 3 字节。
+        // 这里统一:只有 > 0 才传,否则传 null(均值跟随)。
+        if (fan3Speed.HasValue && fan3Speed.Value < 0) fan3Speed = null;
+        // ponytail: 守卫 —— 任一风扇算出 0 档且确实是曲线给的值时,记一条 Warn,
+        // 便于以后定位"某个风扇停转"。正常降温/曲线档不应出现 0(曲线最低档是 600 RPM)。
+        if (fanSpeed1 <= 0 || fanSpeed2 <= 0) {
+          Logger.Warn($"[fan] level zero: control='{ConfigService.FanControl}' table='{ConfigService.FanTable}' " +
+                      $"sync={ConfigService.FanSync} cpuT={HardwareService.CPUTemp:F1} gpuT={HardwareService.GPUTemp:F1} " +
+                      $"-> write({fanSpeed1},{fanSpeed2})");
+        }
         SetFanLevel(fanSpeed1, fanSpeed2, fan3Speed);
         if (!HardwareService.MonitorFan)
           HardwareService.UpdateFanSpeed(new[] { fanSpeed1, fanSpeed2, fan3Speed ?? fanSpeed1 });
